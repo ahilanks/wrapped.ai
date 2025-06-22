@@ -282,7 +282,7 @@ const Modern3DUMAP: React.FC = () => {
           
           // Combine the components. Alpha controls brightness with additive blending.
           // The border is made much brighter than the core to create a sharp edge.
-          float final_alpha = core * 0.7 + border * 2.0 + glow;
+          float final_alpha = core * 0.4 + border * 1.0 + glow;
           
           gl_FragColor = vec4(vColor, final_alpha);
         }
@@ -870,7 +870,7 @@ const Modern3DUMAP: React.FC = () => {
       
       {error && (
         <div className="ui-panel error-panel">
-          <h3>❌ Error</h3>
+          <h3>Error</h3>
           <div className="error-message">{error}</div>
           <button className="refresh-btn" onClick={fetchData}>
             Retry
@@ -880,7 +880,7 @@ const Modern3DUMAP: React.FC = () => {
       
       {/* Control Panel */}
       <div className="ui-panel control-panel">
-        <h3>🎛️ Controls</h3>
+        <h3>Controls</h3>
         
         <div className="control-group">
           <label>Point Size</label>
@@ -933,7 +933,7 @@ const Modern3DUMAP: React.FC = () => {
         </div>
         
         <div className="control-group">
-          <label>Select Your Email</label>
+          <label>Email</label>
           <select
             value={currentUserEmail || ''}
             onChange={(e) => setCurrentUserEmail(e.target.value)}
@@ -946,7 +946,7 @@ const Modern3DUMAP: React.FC = () => {
         </div>
         
         <button className="refresh-btn" onClick={refreshData}>
-          🔄 Refresh Data
+          Refresh Data
         </button>
         
         <div className="stats">
@@ -973,7 +973,7 @@ const Modern3DUMAP: React.FC = () => {
       
       {/* Search Panel */}
       <div className="ui-panel search-panel">
-        <h3>🔍 Search & Filter</h3>
+        <h3>Search & Filter</h3>
         <input
           type="text"
           value={searchTerm}
@@ -984,7 +984,7 @@ const Modern3DUMAP: React.FC = () => {
       
       {/* Info Panel */}
       <div className={`ui-panel info-panel ${selectedPoint ? 'visible' : ''}`}>
-        <h3>💬 Conversation Details</h3>
+        <h3>Conversation Details</h3>
         <div className="info-panel-content">
           {selectedPoint ? (
             <>
@@ -1051,7 +1051,7 @@ const Modern3DUMAP: React.FC = () => {
       
       {/* Legend Panel */}
       <div className={`ui-panel legend-panel ${comparisonMode ? 'hidden' : ''}`}>
-        <h3>👤 Users</h3>
+        <h3>Users</h3>
         <div>
           {Array.from(userColors.entries()).map(([email, color]) => {
             const shortEmail = email.length > 25 ? email.substring(0, 22) + '...' : email;
