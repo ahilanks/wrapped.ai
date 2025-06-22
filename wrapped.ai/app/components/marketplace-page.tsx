@@ -9,7 +9,7 @@ import { ArrowLeft, Sparkles, Star, ExternalLink, ShoppingCart, TrendingUp, Zap 
 interface MarketplacePageProps {
   user: { name: string; email: string } | null
   onLogout: () => void
-  onNavigate: (page: "dashboard" | "connect" | "marketplace") => void
+  onNavigate: (page: "dashboard" | "connect" | "marketplace" | "tutorial") => void
 }
 
 type MarketplaceState = "initial" | "loading" | "results"
@@ -136,6 +136,22 @@ export default function MarketplacePage({ user, onLogout, onNavigate }: Marketpl
                 <h1 className="text-xl font-semibold text-gray-900">AI Marketplace</h1>
               </div>
               <div className="flex items-center space-x-4">
+                <Button
+                  onClick={() => onNavigate("connect")}
+                  variant="outline"
+                  size="sm"
+                  className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
+                >
+                  Connect
+                </Button>
+                <Button
+                  onClick={() => onNavigate("tutorial")}
+                  variant="outline"
+                  size="sm"
+                  className="bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100"
+                >
+                  Tutorial
+                </Button>
                 <span className="text-sm text-gray-700">Welcome, {user?.name}</span>
                 <Button onClick={onLogout} variant="outline" size="sm">
                   Logout
@@ -224,6 +240,14 @@ export default function MarketplacePage({ user, onLogout, onNavigate }: Marketpl
                   className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
                 >
                   Connect
+                </Button>
+                <Button
+                  onClick={() => onNavigate("tutorial")}
+                  variant="outline"
+                  size="sm"
+                  className="bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100"
+                >
+                  Tutorial
                 </Button>
                 <span className="text-sm text-gray-700">Welcome, {user?.name}</span>
                 <Button onClick={onLogout} variant="outline" size="sm">
@@ -365,6 +389,14 @@ export default function MarketplacePage({ user, onLogout, onNavigate }: Marketpl
                 className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
               >
                 Connect
+              </Button>
+              <Button
+                onClick={() => onNavigate("tutorial")}
+                variant="outline"
+                size="sm"
+                className="bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100"
+              >
+                Tutorial
               </Button>
               <span className="text-sm text-gray-700">Welcome, {user?.name}</span>
               <Button onClick={onLogout} variant="outline" size="sm">
