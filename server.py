@@ -25,7 +25,7 @@ os.environ['NUMBA_NUM_THREADS'] = '1'
 # --- Setup ---
 SUPABASE_URL = "https://aqavgmrcggugruedqtzv.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFxYXZnbXJjZ2d1Z3J1ZWRxdHp2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1NDA5MTMsImV4cCI6MjA2NjExNjkxM30.f4RSnwdPVkSpApBUuzZlYnG63Y-3SUQtYkAhXpi3tFk"
-ANTHROPIC_KEY = "Gourhgaou"
+ANTHROPIC_API_KEY = "Gourhgaou"
 app = Flask(__name__, static_folder='dist', static_url_path=None)
 CORS(app)
 
