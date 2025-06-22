@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Upload, Play, ExternalLink, AlertCircle } from "lucide-react"
+import { Upload, Play, ExternalLink, AlertCircle, ArrowLeft, UploadCloud, FileJson, X, CheckCircle } from "lucide-react"
 
 interface TutorialPageProps {
   user: { name: string; email: string } | null
@@ -23,9 +23,10 @@ interface Dot {
 
 export default function TutorialPage({ user, onLogout, onNavigate }: TutorialPageProps) {
   const [selectedTutorial, setSelectedTutorial] = useState<string | null>(null)
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null)
+  const [file, setFile] = useState<File | null>(null)
   const [isUploading, setIsUploading] = useState(false)
-  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'success' | 'error'>('idle')
+  const [errorMessage, setErrorMessage] = useState('')
   const [dots, setDots] = useState<Dot[]>([])
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -162,31 +163,51 @@ export default function TutorialPage({ user, onLogout, onNavigate }: TutorialPag
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    setUploadError(null)
-    
-    if (file) {
-      // Check if file is a ZIP file
-      if (!file.name.toLowerCase().endsWith('.zip')) {
-        setUploadError('Please upload a ZIP file only. Other file types are not supported.')
-        return
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const selectedFile = e.target.files[0]
+      if (selectedFile.type === "application/json") {
+        setFile(selectedFile)
+        setUploadStatus('idle')
+        setErrorMessage('')
+      } else {
+        setErrorMessage("Please select a valid JSON file.")
       }
-      
-      setUploadedFile(file)
-      setIsUploading(true)
-      
-      // Simulate upload process
-      setTimeout(() => {
-        setIsUploading(false)
-        // Here you can add actual upload logic to your backend
-        console.log('File uploaded:', file.name)
-        
-        // Redirect to dashboard after successful upload
-        setTimeout(() => {
-          onNavigate("dashboard")
-        }, 1000) // Small delay to show success state
-      }, 2000)
+    }
+  }
+
+  const handleUpload = async () => {
+    if (!file || !user?.email) {
+      setErrorMessage("No file selected or user not logged in.")
+      return
+    }
+
+    setIsUploading(true)
+    setUploadStatus('idle')
+    setErrorMessage('')
+
+    const formData = new FormData()
+    formData.append("file", file)
+    formData.append("email", user.email)
+
+    try {
+      const response = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      })
+
+      if (response.ok) {
+        setUploadStatus('success')
+      } else {
+        const data = await response.json()
+        setErrorMessage(data.error || "An unknown error occurred.")
+        setUploadStatus('error')
+      }
+    } catch (err) {
+      setErrorMessage("Failed to connect to the server.")
+      setUploadStatus('error')
+    } finally {
+      setIsUploading(false)
     }
   }
 
@@ -204,186 +225,84 @@ export default function TutorialPage({ user, onLogout, onNavigate }: TutorialPag
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 relative overflow-hidden">
-      {/* Animated Background Canvas */}
-      <canvas
-        ref={canvasRef}
-        className="fixed inset-0 pointer-events-none z-0"
-        style={{ background: 'linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%)' }}
-      />
-      
-      {/* Content */}
-      <div className="relative z-10">
-        {/* Header */}
-        <div className="max-w-7xl mx-auto p-4">
-          <div className="flex justify-between items-center mb-8">
-            <div className="flex items-center space-x-4">
-              <h1 className="text-2xl font-bold text-white">Welcome to Wrapped.ai</h1>
-            </div>
-            
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-300">
-                Welcome, {user?.name || 'User'}!
-              </span>
-              <Button
-                onClick={onLogout}
-                variant="outline"
-                size="sm"
-                className="border-gray-600 text-gray-300 hover:bg-gray-800"
+    <div className="flex flex-col h-screen bg-gray-900 text-white">
+      <header className="flex items-center justify-between p-4 border-b border-gray-800">
+        <Button variant="ghost" size="icon" onClick={() => onNavigate("dashboard")}>
+          <ArrowLeft className="h-5 w-5" />
+        </Button>
+        <h1 className="text-xl font-semibold">Upload Your Data</h1>
+        <div className="w-10"></div>
+      </header>
+      <main className="flex-1 flex items-center justify-center p-8">
+        <Card className="w-full max-w-lg bg-gray-800/50 border-gray-700 backdrop-blur-sm">
+          <CardHeader>
+            <CardTitle>Upload ChatGPT Export</CardTitle>
+            <CardDescription>
+              Upload your `conversations.json` file to get started.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col items-center justify-center w-full border-2 border-dashed border-gray-600 rounded-lg p-12 text-center">
+              <UploadCloud className="h-12 w-12 text-gray-500 mb-4" />
+              <input
+                type="file"
+                id="file-upload"
+                className="hidden"
+                accept="application/json"
+                onChange={handleFileChange}
+                disabled={isUploading}
+              />
+              <label
+                htmlFor="file-upload"
+                className="cursor-pointer bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors"
               >
-                Logout
-              </Button>
+                {isUploading ? "Uploading..." : "Select conversations.json"}
+              </label>
+              <p className="text-xs text-gray-400 mt-2">
+                Only JSON files are accepted.
+              </p>
             </div>
-          </div>
 
-          {/* Main Content */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {/* Left Side - Upload Section */}
-            <div className="space-y-6">
-              <Card className="h-full bg-gray-800/50 border-gray-700 backdrop-blur-sm">
-                <CardHeader>
-                  <CardTitle className="flex items-center space-x-2 text-white">
-                    <Upload className="w-6 h-6 text-purple-400" />
-                    <span>Upload Your Data</span>
-                  </CardTitle>
-                  <CardDescription className="text-gray-300">
-                    Upload your ZIP file to start your personalized wrapped experience
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  <div className="space-y-4">
-                    {/* Error Message */}
-                    {uploadError && (
-                      <div className="p-4 bg-red-900/50 border border-red-700 rounded-lg">
-                        <div className="flex items-center space-x-2">
-                          <AlertCircle className="w-5 h-5 text-red-400" />
-                          <span className="text-red-300 text-sm font-medium">{uploadError}</span>
-                        </div>
-                      </div>
-                    )}
-                    
-                    <div className="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center hover:border-purple-400 transition-colors bg-gray-800/30">
-                      <input
-                        type="file"
-                        id="file-upload"
-                        className="hidden"
-                        accept=".zip"
-                        onChange={handleFileUpload}
-                        disabled={isUploading}
-                      />
-                      <label htmlFor="file-upload" className="cursor-pointer">
-                        <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                        <p className="text-sm text-gray-300">
-                          {uploadedFile ? uploadedFile.name : "Click to upload or drag and drop"}
-                        </p>
-                        <p className="text-xs text-gray-500 mt-1">
-                          ZIP files only, up to 10MB
-                        </p>
-                      </label>
-                    </div>
-                    
-                    {uploadedFile && (
-                      <div className="p-3 bg-green-900/50 rounded-lg border border-green-700">
-                        <div className="flex items-center space-x-2">
-                          <div className="w-2 h-2 bg-green-400 rounded-full"></div>
-                          <span className="text-sm text-green-300">
-                            {isUploading ? "Uploading..." : "File uploaded successfully! Redirecting to dashboard..."}
-                          </span>
-                        </div>
-                        {!isUploading && (
-                          <p className="text-xs text-green-400 mt-1">
-                            {uploadedFile.name} ({Math.round(uploadedFile.size / 1024)}KB)
-                          </p>
-                        )}
-                      </div>
-                    )}
-                    
-                    {/* <Button
-                      onClick={() => document.getElementById('file-upload')?.click()}
-                      disabled={isUploading}
-                      className="w-full h-12 bg-purple-600 hover:bg-purple-700 text-white"
-                    >
-                      {isUploading ? (
-                        <div className="flex items-center space-x-2">
-                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                          <span>Uploading...</span>
-                        </div>
-                      ) : (
-                        <>
-                          <Upload className="w-5 h-5 mr-2" />
-                          Choose ZIP File to Upload
-                        </>
-                      )}
-                    </Button> */}
-                    
-                    <p className="text-xs text-gray-500 text-center">
-                      Your data is processed securely and never shared with third parties
+            {file && (
+              <div className="mt-6 p-4 bg-gray-700/50 rounded-lg flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <FileJson className="h-6 w-6 text-blue-400" />
+                  <div>
+                    <p className="font-medium">{file.name}</p>
+                    <p className="text-sm text-gray-400">
+                      {(file.size / 1024 / 1024).toFixed(2)} MB
                     </p>
                   </div>
-                </CardContent>
-              </Card>
-            </div>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setFile(null)}>
+                  <X className="h-5 w-5" />
+                </Button>
+              </div>
+            )}
 
-            {/* Right Side - Video Tutorials */}
-            <div className="space-y-6">
-              <Card className="h-full bg-gray-800/50 border-gray-700 backdrop-blur-sm">
-                <CardHeader>
-                  <CardTitle className="flex items-center space-x-2 text-white">
-                    <Play className="w-6 h-6 text-green-400" />
-                    <span>Video Tutorials</span>
-                  </CardTitle>
-                  <CardDescription className="text-gray-300">
-                    Learn how to use AI tools effectively with our expert tutorials
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {/* GPT Tutorial */}
-                  <div 
-                    className="p-4 border border-gray-600 rounded-lg cursor-pointer hover:bg-gray-700/50 transition-colors"
-                    onClick={() => handleTutorialClick('gpt')}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-12 h-12 bg-gradient-to-br from-green-400 to-green-600 rounded-lg flex items-center justify-center">
-                          <span className="text-white font-bold text-lg">GPT</span>
-                        </div>
-                        <div>
-                          <h3 className="font-medium text-white">GPT Tutorial</h3>
-                          <p className="text-sm text-gray-300">
-                            Master ChatGPT prompts and techniques
-                          </p>
-                        </div>
-                      </div>
-                      <ExternalLink className="w-5 h-5 text-gray-400" />
-                    </div>
-                  </div>
+            <Button
+              onClick={handleUpload}
+              disabled={!file || isUploading}
+              className="w-full mt-6 bg-green-600 hover:bg-green-700"
+            >
+              {isUploading ? "Processing..." : "Upload and Process"}
+            </Button>
+            
+            {uploadStatus === 'success' && (
+              <div className="mt-4 p-3 bg-green-900/50 text-green-300 rounded-lg flex items-center gap-3">
+                <CheckCircle className="h-5 w-5" />
+                <p>Upload successful! Your data is being processed in the background.</p>
+              </div>
+            )}
+            {uploadStatus === 'error' && (
+              <div className="mt-4 p-3 bg-red-900/50 text-red-300 rounded-lg">
+                <p>Error: {errorMessage}</p>
+              </div>
+            )}
 
-                  {/* Claude Tutorial */}
-                  <div 
-                    className="p-4 border border-gray-600 rounded-lg cursor-pointer hover:bg-gray-700/50 transition-colors"
-                    onClick={() => handleTutorialClick('claude')}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-12 h-12 bg-gradient-to-br from-orange-400 to-orange-600 rounded-lg flex items-center justify-center">
-                          <span className="text-white font-bold text-lg">C</span>
-                        </div>
-                        <div>
-                          <h3 className="font-medium text-white">Claude Tutorial</h3>
-                          <p className="text-sm text-gray-300">
-                            Learn advanced Claude AI strategies
-                          </p>
-                        </div>
-                      </div>
-                      <ExternalLink className="w-5 h-5 text-gray-400" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-        </div>
-      </div>
+          </CardContent>
+        </Card>
+      </main>
     </div>
   )
 } 

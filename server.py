@@ -19,10 +19,13 @@ import anthropic
 if os.name == 'posix':
     os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
 
+# Force Numba to use a single thread to avoid concurrency issues in Flask
+os.environ['NUMBA_NUM_THREADS'] = '1'
+
 # --- Setup ---
 SUPABASE_URL = "https://aqavgmrcggugruedqtzv.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFxYXZnbXJjZ2d1Z3J1ZWRxdHp2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1NDA5MTMsImV4cCI6MjA2NjExNjkxM30.f4RSnwdPVkSpApBUuzZlYnG63Y-3SUQtYkAhXpi3tFk"
-ANTHROPIC_API_KEY = "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"
+ANTHROPIC_API_KEY = "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"
 
 app = Flask(__name__, static_folder='dist', static_url_path=None)
 CORS(app)
@@ -72,9 +75,9 @@ def extract_keywords_from_titles(titles, top_n=2):
 
 def fetch_embeddings_from_supabase():
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    batch_size, offset, all_records = 1000, 0, []
+    batch_size, offset, all_records = 500, 0, []
     # Limit records during development to prevent database timeouts on large tables
-    MAX_RECORDS_TO_FETCH = 10000
+    MAX_RECORDS_TO_FETCH = 36000
 
     while True:
         try:
@@ -88,12 +91,13 @@ def fetch_embeddings_from_supabase():
             all_records.extend(resp.data)
             offset += batch_size
 
-            # Stop fetching if we've reached our development limit
             if len(all_records) >= MAX_RECORDS_TO_FETCH:
                 break
+            print(f"Fetched {len(all_records)} records")
         except Exception as e:
-            print(f"Error fetching from Supabase: {e}")
-            break
+            print(f"Error fetching batch from Supabase at offset {offset}: {e}. Skipping to next batch.")
+            offset += batch_size
+            continue
 
     embeddings, emails, titles, timestamps, bodies = [], [], [], [], []
     for i, r in enumerate(all_records):
@@ -264,4 +268,4 @@ def compare_users():
     return jsonify(top_pairs)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8000)
+    app.run(debug=True, port=8000, threaded=False)
