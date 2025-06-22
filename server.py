@@ -10,9 +10,14 @@ from collections import Counter
 from datetime import datetime
 import umap
 from sklearn.cluster import KMeans
+from sklearn.metrics.pairwise import cosine_similarity
 import random
 from supabase import create_client, Client
 import anthropic
+
+# Fix for macOS semaphore leak warning with UMAP/sklearn
+if os.name == 'posix':
+    os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
 
 # --- Setup ---
 SUPABASE_URL = "https://aqavgmrcggugruedqtzv.supabase.co"
@@ -41,29 +46,41 @@ Please generate a very short (2-4 words) descriptive title..."""
                 messages=[{"role": "user", "content": prompt}]
             )
             return message.content[0].text.strip().replace('"', '').replace("'", "")
-        except:
+        except Exception as e:
+            print(f"Claude API call failed, falling back to keyword extraction. Error: {e}")
             time.sleep(1)
-    return f"Cluster {cluster_id + 1}"
+    return extract_keywords_from_titles(conversation_titles)
 
 def extract_keywords_from_titles(titles, top_n=2):
     all_text = ' '.join(titles)
     words = re.findall(r'\b[a-zA-Z]{3,}\b', all_text.lower())
-    stop_words = {...}  # same as before
+    stop_words = {
+        'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been', 
+        'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should', 
+        'can', 'could', 'not', 'no', 'nor', 'so', 'if', 'then', 'else', 'when', 'where', 
+        'why', 'how', 'which', 'who', 'what', 'whom', 'whose', 'to', 'of', 'in', 'on', 
+        'at', 'for', 'with', 'by', 'from', 'about', 'as', 'into', 'like', 'through', 
+        'after', 'over', 'between', 'out', 'against', 'during', 'without', 'before', 
+        'under', 'around', 'among', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me',
+        'my', 'myself', 'your', 'yours', 'yourself', 'him', 'his', 'himself', 'her', 
+        'hers', 'herself', 'its', 'itself', 'our', 'ours', 'ourselves', 'their', 
+        'theirs', 'themselves'
+    }
     words = [w for w in words if w not in stop_words]
     top = [w for w, _ in Counter(words).most_common(top_n)]
-    return ' & '.join(top) if top else "Mixed Topics"
+    return ' & '.join(top) if top else "General Topics"
 
 def fetch_embeddings_from_supabase():
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
     batch_size, offset, all_records = 1000, 0, []
     # Limit records during development to prevent database timeouts on large tables
-    MAX_RECORDS_TO_FETCH = 3000
+    MAX_RECORDS_TO_FETCH = 36000
 
     while True:
         try:
             # Select only the specific columns we need to improve query performance
             resp = supabase.table("chat_logs_final").select(
-                "email, title, created_at, embeddings_json"
+                "email, title, created_at, embeddings_json, body"
             ).range(offset, offset + batch_size - 1).execute()
             
             if not resp.data: break
@@ -78,11 +95,12 @@ def fetch_embeddings_from_supabase():
             print(f"Error fetching from Supabase: {e}")
             break
 
-    embeddings, emails, titles, timestamps = [], [], [], []
+    embeddings, emails, titles, timestamps, bodies = [], [], [], [], []
     for i, r in enumerate(all_records):
         emails.append(r.get("email", "unknown"))
         titles.append(r.get("title", "untitled"))
         timestamps.append(r.get("created_at", datetime.now().isoformat()))
+        bodies.append(r.get("body", ""))
         emb = r.get("embeddings_json")
         if emb:
             try:
@@ -92,7 +110,7 @@ def fetch_embeddings_from_supabase():
                 embeddings.append(np.random.randn(512).tolist())
         else:
             embeddings.append(np.random.randn(512).tolist())
-    return np.array(embeddings), emails, titles, timestamps
+    return np.array(embeddings), emails, titles, timestamps, bodies
 
 def generate_cluster_titles_for_users(df, embeddings, n_clusters=5):
     cluster_info = {}
@@ -123,7 +141,7 @@ def generate_cluster_titles_for_users(df, embeddings, n_clusters=5):
             df.loc[user_df.index, 'cluster_title'] = user_df['cluster'].map(lambda x: user_info[x]['title'])
     return df, cluster_info
 
-def create_3d_umap_visualization(embeddings, emails, titles, timestamps):
+def create_3d_umap_visualization(embeddings, emails, titles, timestamps, bodies):
     reducer = umap.UMAP(n_components=3, random_state=42)
     embedding_3d = reducer.fit_transform(embeddings)
     df = pd.DataFrame({
@@ -132,13 +150,14 @@ def create_3d_umap_visualization(embeddings, emails, titles, timestamps):
         'z': embedding_3d[:, 2],
         'email': emails,
         'title': titles,
-        'timestamp': timestamps
+        'timestamp': timestamps,
+        'body': bodies
     })
     df, cluster_info = generate_cluster_titles_for_users(df, embeddings)
     return df, cluster_info
 
 # --- Flask Routes ---
-cached_df, cached_cluster_info, last_updated = None, None, None
+cached_df, cached_cluster_info, cached_embeddings, last_updated = None, None, None, None
 
 # Serve React App
 if os.path.exists('dist'):
@@ -156,10 +175,11 @@ def health():
 
 @app.route('/api/data')
 def get_data():
-    global cached_df, cached_cluster_info, last_updated
+    global cached_df, cached_cluster_info, cached_embeddings, last_updated
     if cached_df is None:
-        emb, ems, ttl, tss = fetch_embeddings_from_supabase()
-        cached_df, cached_cluster_info = create_3d_umap_visualization(emb, ems, ttl, tss)
+        emb, ems, ttl, tss, bds = fetch_embeddings_from_supabase()
+        cached_embeddings = emb
+        cached_df, cached_cluster_info = create_3d_umap_visualization(emb, ems, ttl, tss, bds)
         last_updated = datetime.now()
     df = cached_df
     return jsonify({
@@ -179,11 +199,59 @@ def get_data():
 
 @app.route('/api/refresh', methods=['POST'])
 def refresh():
-    global cached_df, cached_cluster_info, last_updated
-    emb, ems, ttl, tss = fetch_embeddings_from_supabase()
-    cached_df, cached_cluster_info = create_3d_umap_visualization(emb, ems, ttl, tss)
+    global cached_df, cached_cluster_info, cached_embeddings, last_updated
+    emb, ems, ttl, tss, bds = fetch_embeddings_from_supabase()
+    cached_embeddings = emb
+    cached_df, cached_cluster_info = create_3d_umap_visualization(emb, ems, ttl, tss, bds)
     last_updated = datetime.now()
     return jsonify({"message": "Refreshed"})
+
+@app.route('/api/compare', methods=['POST'])
+def compare_users():
+    global cached_df, cached_embeddings
+    if cached_df is None or cached_embeddings is None:
+        return jsonify({"error": "Data not cached yet. Please refresh the main page."}), 500
+
+    data = request.get_json()
+    email1 = data.get('email1')
+    email2 = data.get('email2')
+
+    if not email1 or not email2:
+        return jsonify({"error": "Two emails are required for comparison."}), 400
+
+    user1_df = cached_df[cached_df['email'] == email1]
+    user2_df = cached_df[cached_df['email'] == email2]
+
+    if user1_df.empty or user2_df.empty:
+        return jsonify({"error": "One or both users not found."}), 404
+
+    user1_indices = user1_df.index.tolist()
+    user2_indices = user2_df.index.tolist()
+
+    user1_embeddings = cached_embeddings[user1_indices]
+    user2_embeddings = cached_embeddings[user2_indices]
+
+    similarity_matrix = cosine_similarity(user1_embeddings, user2_embeddings)
+
+    top_n = 5
+    flat_indices = np.argsort(similarity_matrix.flatten())[-top_n:][::-1]
+
+    top_pairs = []
+    for flat_idx in flat_indices:
+        idx1, idx2 = np.unravel_index(flat_idx, similarity_matrix.shape)
+        similarity_score = similarity_matrix[idx1, idx2]
+
+        if similarity_score < 0.7:
+            continue
+            
+        pair_info = {
+            "similarity": float(similarity_score),
+            "conversation1": user1_df.iloc[idx1].to_dict(),
+            "conversation2": user2_df.iloc[idx2].to_dict()
+        }
+        top_pairs.append(pair_info)
+    
+    return jsonify(top_pairs)
 
 if __name__ == '__main__':
     app.run(debug=True, port=8000)

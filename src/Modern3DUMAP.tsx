@@ -10,6 +10,7 @@ interface ConversationPoint {
   timestamp: string;
   cluster?: number;
   cluster_title?: string;
+  body?: string;
 }
 
 interface SphericalCoordinates {
@@ -42,7 +43,7 @@ const Modern3DUMAP: React.FC = () => {
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2());
   const sphericalRef = useRef<SphericalCoordinates>({
-    radius: 25,
+    radius: 15,
     theta: 0,
     phi: Math.PI / 4,
   });
@@ -68,6 +69,16 @@ const Modern3DUMAP: React.FC = () => {
   const [hoveredPoint, setHoveredPoint] = useState<ConversationPoint | null>(null);
   const [mousePosition, setMousePosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [tooltipVisible, setTooltipVisible] = useState<boolean>(false);
+  const [uniqueClusters, setUniqueClusters] = useState<string[]>([]);
+  const [selectedCluster, setSelectedCluster] = useState<string>('all');
+  const [allUsers, setAllUsers] = useState<string[]>([]);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
+  
+  // Comparison mode state
+  const [comparisonMode, setComparisonMode] = useState<boolean>(false);
+  const [comparisonUser, setComparisonUser] = useState<ConversationPoint | null>(null);
+  const [sharedConnections, setSharedConnections] = useState<any[]>([]);
+  const connectionLinesRef = useRef<THREE.Group | null>(null);
 
   // Color palette
   const colorPalette = [
@@ -91,6 +102,15 @@ const Modern3DUMAP: React.FC = () => {
       
       setData(apiData.data);
       setStats(apiData.stats);
+      
+      const uniqueClusterTitles = [...new Set(apiData.data.map(p => p.cluster_title).filter(Boolean) as string[])];
+      setUniqueClusters(uniqueClusterTitles.sort());
+      
+      const uniqueUsers = [...new Set(apiData.data.map(d => d.email))].sort();
+      setAllUsers(uniqueUsers);
+      if (uniqueUsers.length > 0 && !currentUserEmail) {
+        setCurrentUserEmail(uniqueUsers[0]);
+      }
       
       // Assign colors to users
       const colors = assignColors(apiData.data);
@@ -159,7 +179,7 @@ const Modern3DUMAP: React.FC = () => {
     const camera = new THREE.PerspectiveCamera(
       75,
       container.clientWidth / container.clientHeight,
-      0.1,
+      0.001,
       1000
     );
     camera.position.set(25, 15, 25);
@@ -202,10 +222,22 @@ const Modern3DUMAP: React.FC = () => {
       positions[i * 3 + 1] = point.y;
       positions[i * 3 + 2] = point.z;
       
-      const color = new THREE.Color(userColors.get(point.email) || '#ffffff');
-      colors[i * 3] = color.r;
-      colors[i * 3 + 1] = color.g;
-      colors[i * 3 + 2] = color.b;
+      const baseColor = new THREE.Color(userColors.get(point.email) || '#ffffff');
+      
+      if (point.cluster !== undefined && point.cluster !== null) {
+        const color = baseColor.clone();
+        const hsl = { h: 0, s: 0, l: 0 };
+        color.getHSL(hsl);
+        const lightnessShift = ((point.cluster % 5) - 2) * 0.1;
+        color.setHSL(hsl.h, hsl.s, Math.max(0.2, Math.min(0.9, hsl.l + lightnessShift)));
+        colors[i * 3] = color.r;
+        colors[i * 3 + 1] = color.g;
+        colors[i * 3 + 2] = color.b;
+      } else {
+        colors[i * 3] = baseColor.r;
+        colors[i * 3 + 1] = baseColor.g;
+        colors[i * 3 + 2] = baseColor.b;
+      }
       
       sizes[i] = Math.random() * 0.5 + 0.8;
     });
@@ -237,17 +269,28 @@ const Modern3DUMAP: React.FC = () => {
         varying vec3 vColor;
         
         void main() {
-          float distance = length(gl_PointCoord - vec2(0.5));
-          float alpha = 1.0 - smoothstep(0.0, 0.5, distance);
-          float glow = 1.0 - smoothstep(0.0, 0.3, distance);
+          float dist = length(gl_PointCoord - vec2(0.5));
+
+          // A soft glow that covers the whole point and fades outwards
+          float glow = pow(1.0 - smoothstep(0.2, 0.5, dist), 2.0) * glowIntensity;
           
-          vec3 finalColor = vColor + (vColor * glow * glowIntensity);
-          gl_FragColor = vec4(finalColor, alpha);
+          // The solid core of the circle, with a sharp edge
+          float core = 1.0 - smoothstep(0.47, 0.48, dist);
+
+          // A thin, bright border around the core for contrast
+          float border = smoothstep(0.47, 0.48, dist) - smoothstep(0.49, 0.5, dist);
+          
+          // Combine the components. Alpha controls brightness with additive blending.
+          // The border is made much brighter than the core to create a sharp edge.
+          float final_alpha = core * 0.7 + border * 2.0 + glow;
+          
+          gl_FragColor = vec4(vColor, final_alpha);
         }
       `,
       transparent: true,
       vertexColors: true,
-      blending: THREE.AdditiveBlending
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
     });
     
     const points = new THREE.Points(geometry, material);
@@ -255,53 +298,48 @@ const Modern3DUMAP: React.FC = () => {
     pointsRef.current = points;
   }, [pointSize, glowIntensity]);
 
-  // Filter data based on search term
-  const filterData = useCallback((searchTerm: string, data: ConversationPoint[]) => {
-    if (!searchTerm) {
-      setFilteredIndices(new Set(Array.from(Array(data.length).keys())));
-    } else {
-      const filtered = new Set<number>();
-      const term = searchTerm.toLowerCase();
-      
-      data.forEach((point, index) => {
-        if (point.title.toLowerCase().includes(term) || 
-            point.email.toLowerCase().includes(term) ||
-            (point.cluster_title && point.cluster_title.toLowerCase().includes(term))) {
-          filtered.add(index);
-        }
-      });
-      
-      setFilteredIndices(filtered);
-    }
-  }, []);
-
-  // Update point visibility
-  const updateVisibility = useCallback(() => {
-    if (!pointsRef.current) return;
+  // This useEffect replaces the old filterData and updateVisibility logic
+  useEffect(() => {
+    if (!pointsRef.current || !data || data.length === 0) return;
     
     const geometry = pointsRef.current.geometry;
     const positions = geometry.attributes.position.array as Float32Array;
+    const term = searchTerm.toLowerCase();
+
+    const newFilteredIndices = new Set<number>();
     
     data.forEach((point, index) => {
-      const visible = filteredIndices.has(index);
+      const searchMatch = !term || 
+          point.title.toLowerCase().includes(term) || 
+          point.email.toLowerCase().includes(term) ||
+          (point.cluster_title && point.cluster_title.toLowerCase().includes(term)) ||
+          (point.body && point.body.toLowerCase().includes(term));
       
-      if (!visible) {
-        positions[index * 3] = 1000; // Move far away
-        positions[index * 3 + 1] = 1000;
-        positions[index * 3 + 2] = 1000;
-      } else {
+      const clusterMatch = selectedCluster === 'all' || point.cluster_title === selectedCluster;
+      const comparisonMatch = !comparisonMode || point.email === currentUserEmail || point.email === comparisonUser?.email;
+
+      const isVisible = searchMatch && clusterMatch && comparisonMatch;
+
+      if (isVisible) {
+        newFilteredIndices.add(index);
         positions[index * 3] = point.x;
         positions[index * 3 + 1] = point.y;
         positions[index * 3 + 2] = point.z;
+      } else {
+        // Move points far away to hide them, using a large number
+        positions[index * 3] = 10000;
+        positions[index * 3 + 1] = 10000;
+        positions[index * 3 + 2] = 10000;
       }
     });
     
+    setFilteredIndices(newFilteredIndices);
     geometry.attributes.position.needsUpdate = true;
-  }, [data, filteredIndices]);
+  }, [data, searchTerm, selectedCluster, pointSize, userColors, comparisonMode, comparisonUser, currentUserEmail]);
 
   // Mouse event handlers
   const handleMouseMove = useCallback((event: React.MouseEvent) => {
-    if (!rendererRef.current || !cameraRef.current || !pointsRef.current) return;
+    if (!rendererRef.current || !cameraRef.current || !pointsRef.current || !filteredIndices) return;
 
     const rect = rendererRef.current.domElement.getBoundingClientRect();
     mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -374,7 +412,7 @@ const Modern3DUMAP: React.FC = () => {
       const zoomFactor = e.deltaY > 0 ? 1 + zoomSpeed : 1 - zoomSpeed;
       
       sphericalRef.current.radius *= zoomFactor;
-      sphericalRef.current.radius = Math.max(8, Math.min(80, sphericalRef.current.radius));
+      sphericalRef.current.radius = Math.max(0.001, Math.min(80, sphericalRef.current.radius));
       
       updateCameraPosition();
       e.preventDefault();
@@ -433,16 +471,6 @@ const Modern3DUMAP: React.FC = () => {
     }
   }, [glowIntensity]);
 
-  // Filter data when search term changes
-  useEffect(() => {
-    filterData(searchTerm, data);
-  }, [searchTerm, data, filterData]);
-
-  // Update visibility when filtered indices change
-  useEffect(() => {
-    updateVisibility();
-  }, [filteredIndices, updateVisibility]);
-
   // Create visualization when data changes
   useEffect(() => {
     if (data.length > 0 && userColors.size > 0) {
@@ -472,11 +500,82 @@ const Modern3DUMAP: React.FC = () => {
         rendererRef.current.dispose();
       }
     };
-  }, []);
+  }, [initScene, fetchData, setupControls, animate, handleResize]);
 
   // Calculate stats
   const totalUsers = userColors.size;
   const visiblePoints = filteredIndices.size;
+
+  // Comparison mode logic
+  const enterComparisonMode = useCallback(async (targetUser: ConversationPoint) => {
+    if (!currentUserEmail) {
+      alert("Current user not set.");
+      return;
+    }
+    
+    setComparisonUser(targetUser);
+    setIsLoading(true);
+
+    try {
+      const response = await fetch('/api/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email1: currentUserEmail, email2: targetUser.email })
+      });
+      const connections = await response.json();
+      setSharedConnections(connections);
+      setComparisonMode(true);
+    } catch (err) {
+      console.error("Failed to fetch comparison:", err);
+      setError("Could not load shared connections.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [currentUserEmail]);
+
+  const exitComparisonMode = () => {
+    setComparisonMode(false);
+    setComparisonUser(null);
+    setSharedConnections([]);
+  };
+
+  // Draw connection lines
+  useEffect(() => {
+    if (!sceneRef.current) return;
+
+    if (connectionLinesRef.current) {
+      sceneRef.current.remove(connectionLinesRef.current);
+      connectionLinesRef.current.clear();
+    }
+
+    if (comparisonMode && sharedConnections.length > 0) {
+      const lineGroup = new THREE.Group();
+      
+      sharedConnections.forEach(conn => {
+        const p1 = conn.conversation1;
+        const p2 = conn.conversation2;
+        
+        const points = [
+          new THREE.Vector3(p1.x, p1.y, p1.z),
+          new THREE.Vector3(p2.x, p2.y, p2.z)
+        ];
+        
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const material = new THREE.LineBasicMaterial({
+          color: 0xffffff,
+          linewidth: 1,
+          transparent: true,
+          opacity: 0.5 + (conn.similarity - 0.7) // Opacity based on similarity
+        });
+        
+        const line = new THREE.Line(geometry, material);
+        lineGroup.add(line);
+      });
+      
+      sceneRef.current.add(lineGroup);
+      connectionLinesRef.current = lineGroup;
+    }
+  }, [comparisonMode, sharedConnections]);
 
   return (
     <div style={{ 
@@ -517,7 +616,7 @@ const Modern3DUMAP: React.FC = () => {
           top: 20px;
           left: 50%;
           transform: translateX(-50%);
-          width: 320px;
+          width: 360px;
           opacity: 0.9;
         }
         
@@ -605,6 +704,7 @@ const Modern3DUMAP: React.FC = () => {
           font-size: 14px;
           outline: none;
           transition: all 0.3s ease;
+          box-sizing: border-box;
         }
         
         input[type="text"]:focus {
@@ -731,6 +831,24 @@ const Modern3DUMAP: React.FC = () => {
           font-size: 14px;
           text-align: center;
         }
+        
+        .dropdown-select {
+          width: 100%;
+          padding: 10px 12px;
+          background: rgba(40, 40, 40, 0.8);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 8px;
+          color: #ffffff;
+          font-size: 13px;
+          outline: none;
+          transition: all 0.3s ease;
+          -webkit-appearance: none;
+          appearance: none;
+          background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%23999%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22/%3E%3C/svg%3E');
+          background-repeat: no-repeat;
+          background-position: right 10px center;
+          background-size: 12px;
+        }
       `}</style>
 
       <div 
@@ -800,6 +918,33 @@ const Modern3DUMAP: React.FC = () => {
           />
         </div>
         
+        <div className="control-group">
+          <label>Filter by Cluster</label>
+          <select
+            value={selectedCluster}
+            onChange={(e) => setSelectedCluster(e.target.value)}
+            className="dropdown-select"
+          >
+            <option value="all">All Clusters</option>
+            {uniqueClusters.map(cluster => (
+              <option key={cluster} value={cluster}>{cluster}</option>
+            ))}
+          </select>
+        </div>
+        
+        <div className="control-group">
+          <label>Select Your Email</label>
+          <select
+            value={currentUserEmail || ''}
+            onChange={(e) => setCurrentUserEmail(e.target.value)}
+            className="dropdown-select"
+          >
+            {allUsers.map(email => (
+              <option key={email} value={email}>{email}</option>
+            ))}
+          </select>
+        </div>
+        
         <button className="refresh-btn" onClick={refreshData}>
           🔄 Refresh Data
         </button>
@@ -840,7 +985,7 @@ const Modern3DUMAP: React.FC = () => {
       {/* Info Panel */}
       <div className={`ui-panel info-panel ${selectedPoint ? 'visible' : ''}`}>
         <h3>💬 Conversation Details</h3>
-        <div>
+        <div className="info-panel-content">
           {selectedPoint ? (
             <>
               <div style={{ marginBottom: '12px' }}>
@@ -863,7 +1008,35 @@ const Modern3DUMAP: React.FC = () => {
                   {new Date(selectedPoint.timestamp).toLocaleString()}
                 </div>
               </div>
-              <div style={{ fontSize: '11px', color: '#e0e0e0', lineHeight: 1.4 }}>
+              {selectedPoint.body && (
+                <div style={{
+                  fontSize: '12px',
+                  color: '#e0e0e0',
+                  lineHeight: 1.4,
+                  maxHeight: '120px',
+                  overflowY: 'auto',
+                  background: 'rgba(0,0,0,0.2)',
+                  padding: '8px',
+                  borderRadius: '6px',
+                  marginBottom: '12px',
+                  whiteSpace: 'pre-wrap'
+                }}>
+                  <div style={{ fontWeight: 600, color: '#ffffff', marginBottom: '6px' }}>
+                    Conversation Body
+                  </div>
+                  {selectedPoint.body}
+                </div>
+              )}
+              {selectedPoint && selectedPoint.email !== currentUserEmail && (
+                <button 
+                  className="refresh-btn" 
+                  style={{marginTop: '12px', width: '100%'}}
+                  onClick={() => enterComparisonMode(selectedPoint)}
+                >
+                  Find Shared Connections
+                </button>
+              )}
+              <div style={{ fontSize: '11px', color: '#e0e0e0', lineHeight: 1.4, marginTop: '12px' }}>
                 This conversation is positioned in 3D space based on its semantic similarity to other conversations. 
                 Points closer together represent more similar topics or themes.
               </div>
@@ -877,7 +1050,7 @@ const Modern3DUMAP: React.FC = () => {
       </div>
       
       {/* Legend Panel */}
-      <div className="ui-panel legend-panel">
+      <div className={`ui-panel legend-panel ${comparisonMode ? 'hidden' : ''}`}>
         <h3>👤 Users</h3>
         <div>
           {Array.from(userColors.entries()).map(([email, color]) => {
@@ -917,6 +1090,51 @@ const Modern3DUMAP: React.FC = () => {
           </>
         )}
       </div>
+      
+      {/* Shared Connections Panel */}
+      {comparisonMode && (
+        <div className="ui-panel" style={{ bottom: '20px', right: '20px', width: '300px', maxHeight: '40vh', overflowY: 'auto' }}>
+          <h3>Shared Connections</h3>
+          <p style={{fontSize: '12px', color: '#a0a0a0', marginTop: '-12px', marginBottom: '12px'}}>
+            With {comparisonUser?.email}
+          </p>
+          <button className="refresh-btn" style={{marginBottom: '10px', width: '100%'}} onClick={exitComparisonMode}>
+            Exit Comparison
+          </button>
+          {sharedConnections.length > 0 ? (
+            sharedConnections.map((conn, index) => (
+              <div key={index} style={{
+                background: 'rgba(40, 40, 40, 0.8)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                padding: '12px',
+                borderRadius: '8px',
+                marginBottom: '8px',
+                fontSize: '12px'
+              }}>
+                <div style={{fontWeight: 600, color: '#fff', marginBottom: '8px', fontSize: '11px', textTransform: 'uppercase', opacity: 0.8, letterSpacing: '0.5px'}}>
+                  ~{(conn.similarity * 100).toFixed(0)}% Match
+                </div>
+                <div style={{marginBottom: '6px'}}>
+                  <span style={{opacity: 0.7, fontWeight: 400}}>You: </span>
+                  <span style={{color: userColors.get(conn.conversation1.email) || '#fff', fontWeight: 300}}>
+                    {conn.conversation1.title}
+                  </span>
+                </div>
+                <div>
+                  <span style={{opacity: 0.7, fontWeight: 400}}>Them: </span>
+                  <span style={{color: userColors.get(conn.conversation2.email) || '#fff', fontWeight: 300}}>
+                    {conn.conversation2.title}
+                  </span>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div style={{color: '#a0a0a0', fontSize: '12px', fontStyle: 'italic', textAlign: 'center', padding: '16px 0'}}>
+              No strong connections found.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };
