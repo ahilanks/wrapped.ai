@@ -34,7 +34,7 @@ def insert_conversation(chat, msg):
         "body": msg.get("text"),
         "created_at": str(msg.get("created_at")),
         "company": "claude",
-        "embedding": generate_dummy_embedding(),
+        "embeddings_json": generate_dummy_embedding(),
         "email": "ahilanks101@gmail.com"  # <-- Set statically or extract from data
     }
 
