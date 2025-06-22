@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import * as THREE from 'three';
 import Chatbot from './Chatbot';
 
@@ -68,6 +69,8 @@ const Modern3DUMAP: React.FC = () => {
   
   // Interaction state
   const [selectedPoint, setSelectedPoint] = useState<ConversationPoint | null>(null);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [isSummarizing, setIsSummarizing] = useState<boolean>(false);
   const [hoveredPoint, setHoveredPoint] = useState<ConversationPoint | null>(null);
   const [mousePosition, setMousePosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [tooltipVisible, setTooltipVisible] = useState<boolean>(false);
@@ -82,6 +85,7 @@ const Modern3DUMAP: React.FC = () => {
   const [sharedConnections, setSharedConnections] = useState<any[]>([]);
   const connectionLinesRef = useRef<THREE.Group | null>(null);
   const [isChatbotVisible, setIsChatbotVisible] = useState<boolean>(false);
+  const navigate = useNavigate();
 
   // Color palette
   const colorPalette = [
@@ -381,6 +385,8 @@ const Modern3DUMAP: React.FC = () => {
   const handleMouseClick = useCallback(() => {
     if (hoveredPoint) {
       setSelectedPoint(hoveredPoint);
+      setSummary(null);
+      setIsSummarizing(false);
     }
   }, [hoveredPoint]);
 
@@ -513,6 +519,30 @@ const Modern3DUMAP: React.FC = () => {
       }
     };
   }, [initScene, fetchData, setupControls, animate, handleResize]);
+
+  const handleSummarize = useCallback(async () => {
+    if (!selectedPoint?.body) return;
+    setIsSummarizing(true);
+    setSummary(null);
+    try {
+      const response = await fetch('/api/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body: selectedPoint.body }),
+      });
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || 'Failed to fetch summary');
+      }
+      const data = await response.json();
+      setSummary(data.summary);
+    } catch (err) {
+      console.error("Failed to fetch summary:", err);
+      setSummary(`Could not generate summary. ${err instanceof Error ? err.message : ''}`);
+    } finally {
+      setIsSummarizing(false);
+    }
+  }, [selectedPoint]);
 
   // Calculate stats
   const totalUsers = userColors.size;
@@ -1088,6 +1118,34 @@ const Modern3DUMAP: React.FC = () => {
                   {new Date(selectedPoint.timestamp).toLocaleString()}
                 </div>
               </div>
+              
+              {(summary || isSummarizing) && (
+                <div style={{
+                  fontSize: '12px',
+                  color: '#e0e0e0',
+                  lineHeight: 1.4,
+                  background: 'rgba(0,0,0,0.2)',
+                  padding: '8px',
+                  borderRadius: '6px',
+                  marginBottom: '12px',
+                }}>
+                  <div style={{ fontWeight: 600, color: '#ffffff', marginBottom: '6px' }}>
+                    Summary
+                  </div>
+                  {isSummarizing ? 'Generating summary with Groq...' : summary}
+                </div>
+              )}
+
+              {selectedPoint.body && !summary && !isSummarizing && (
+                <button
+                  className="refresh-btn"
+                  style={{marginBottom: '12px', width: '100%'}}
+                  onClick={handleSummarize}
+                >
+                  Summarize with Groq
+                </button>
+              )}
+
               {selectedPoint.body && (
                 <div style={{
                   fontSize: '12px',
@@ -1114,6 +1172,28 @@ const Modern3DUMAP: React.FC = () => {
                   onClick={() => enterComparisonMode(selectedPoint)}
                 >
                   Find Shared Connections
+                </button>
+              )}
+              {selectedPoint && selectedPoint.email !== currentUserEmail && (
+                <button
+                  className="refresh-btn"
+                  style={{marginTop: '12px', width: '100%'}}
+                  onClick={() => {
+                    if (currentUserEmail && selectedPoint) {
+                      const topic = encodeURIComponent(selectedPoint.title);
+                      // Create a consistent session ID by sorting emails
+                      const participants = [currentUserEmail, selectedPoint.email].sort();
+                      const sessionId = `${participants[0]}-${participants[1]}-${topic}`;
+                      
+                      const url1 = `/collab-chat/${sessionId}/${currentUserEmail}`;
+                      const url2 = `/collab-chat/${sessionId}/${selectedPoint.email}`;
+
+                      alert(`Share this link with ${selectedPoint.email}:\n${window.location.origin}${url2}`);
+                      navigate(url1);
+                    }
+                  }}
+                >
+                  Poke Their Brain
                 </button>
               )}
               <div style={{ fontSize: '11px', color: '#e0e0e0', lineHeight: 1.4, marginTop: '12px' }}>

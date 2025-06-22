@@ -141,7 +141,7 @@ const Chatbot: React.FC<ChatbotProps> = ({ selectedPoint, currentUserEmail }) =>
           font-weight: 500;
         }
       `}</style>
-      <div className="chatbot-header">Wrapped.ai Assistant</div>
+      <div className="chatbot-header">Groq AI Assistant</div>
       <div className="chatbot-messages">
         {messages.map((msg, index) => (
           <div key={index} className={`message ${msg.isUser ? 'user-message' : 'bot-message'}`}>

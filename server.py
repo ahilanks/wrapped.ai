@@ -14,6 +14,22 @@ from sklearn.metrics.pairwise import cosine_similarity
 import random
 from supabase import create_client, Client
 import anthropic
+from sentence_transformers import SentenceTransformer
+from urllib.parse import unquote as decodeURIComponent
+from groq import Groq
+
+# --- Model Loading ---
+# Load the sentence transformer model globally so it's not reloaded on every request
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# --- Setup ---
+CHAT_LOG_DIR = "chat_sessions"
+if not os.path.exists(CHAT_LOG_DIR):
+    os.makedirs(CHAT_LOG_DIR)
+
+def sanitize_filename(name):
+    # Basic sanitization to prevent directory traversal issues
+    return "".join(c for c in name if c.isalnum() or c in ('-', '_')).rstrip()
 
 # Fix for macOS semaphore leak warning with UMAP/sklearn
 if os.name == 'posix':
@@ -25,12 +41,16 @@ os.environ['NUMBA_NUM_THREADS'] = '1'
 # --- Setup ---
 SUPABASE_URL = "https://aqavgmrcggugruedqtzv.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFxYXZnbXJjZ2d1Z3J1ZWRxdHp2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1NDA5MTMsImV4cCI6MjA2NjExNjkxM30.f4RSnwdPVkSpApBUuzZlYnG63Y-3SUQtYkAhXpi3tFk"
-ANTHROPIC_API_KEY = "Gourhgaou"
+ANTHROPIC_API_KEY = "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"
+GROQ_API_KEY = "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"
+
 app = Flask(__name__, static_folder='dist', static_url_path=None)
 CORS(app)
 
 # Claude client
 claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+# Groq client
+groq_client = Groq(api_key=GROQ_API_KEY)
 
 def generate_cluster_title_with_claude(conversation_titles, cluster_id, max_retries=3):
     titles_text = "\n".join([f"- {title}" for title in conversation_titles[:10]])
@@ -76,7 +96,7 @@ def fetch_embeddings_from_supabase():
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
     batch_size, offset, all_records = 500, 0, []
     # Limit records during development to prevent database timeouts on large tables
-    MAX_RECORDS_TO_FETCH = 36000
+    MAX_RECORDS_TO_FETCH = 45000
 
     while True:
         try:
@@ -268,50 +288,68 @@ def compare_users():
 
 @app.route('/api/chat', methods=['POST'])
 def chat_handler():
-    global cached_df, claude
-    if cached_df is None:
+    global cached_df, cached_embeddings, embedding_model, claude
+    if cached_df is None or cached_embeddings is None:
         return jsonify({"response": "Sorry, the data is not yet loaded. Please wait a moment and try again."}), 500
 
     data = request.get_json()
     query = data.get('query')
     user_email = data.get('user_email')
-    selected_conversation = data.get('selected_conversation')
     chat_history = data.get('chat_history', [])
 
-    if not query:
-        return jsonify({"error": "Query is required."}), 400
+    if not query or not user_email:
+        return jsonify({"error": "Query and user_email are required."}), 400
 
-    # --- 1. Gather Context ---
-    context_str = "Here is some context about the user's conversations:\n"
-    
-    if selected_conversation:
-        context_str += f"- You are currently looking at a conversation titled: '{selected_conversation.get('title', 'N/A')}'.\n"
-        body = selected_conversation.get('body')
-        if body:
-            context_str += f"  Summary of this conversation: {body[:500]}...\n"
+    # --- 1. Semantic Search for Context ---
+    user_df = cached_df[cached_df['email'] == user_email]
+    if user_df.empty:
+        return jsonify({"response": "I couldn't find any data for your email."})
 
-    if user_email:
-        user_df = cached_df[cached_df['email'] == user_email].copy()
-        if not user_df.empty:
-            user_df['timestamp'] = pd.to_datetime(user_df['timestamp'])
-            recent_convos = user_df.nlargest(3, 'timestamp')
-            context_str += "\nHere are some of the user's most recent conversations:\n"
-            for _, row in recent_convos.iterrows():
-                context_str += f"- Title: {row['title']}\n"
+    user_indices = user_df.index.tolist()
+    user_embeddings = cached_embeddings[user_indices]
+
+    # Embed the user's query
+    query_embedding = embedding_model.encode(query, convert_to_tensor=False)
     
+    # Check for dimension mismatch and pad if necessary
+    if query_embedding.shape[0] != user_embeddings.shape[1]:
+        # This is a fallback. Ideally, the offline and online embedding models should be identical.
+        # all-MiniLM-L6-v2 is 384, and the db seems to have 512.
+        padded_query_embedding = np.zeros(user_embeddings.shape[1])
+        padded_query_embedding[:query_embedding.shape[0]] = query_embedding
+        query_embedding = padded_query_embedding
+
+    # Calculate similarities and get top results
+    similarities = cosine_similarity([query_embedding], user_embeddings)[0]
+    top_indices = np.argsort(similarities)[-50:][::-1] # Get top 50
+
+    context_str = "I found the following conversations that might be relevant to your question:\n\n"
+    added_docs = 0
+    for i in top_indices:
+        # Include documents with a very low similarity threshold to maximize context.
+        if similarities[i] > 0.1:
+            match = user_df.iloc[i]
+            if match.get('body'):
+                context_str += f"--- Conversation Title: {match['title']} ---\n"
+                context_str += f"{match['body']}\n\n"
+                added_docs += 1
+    
+    if added_docs == 0:
+        context_str = "I couldn't find any specific conversations with text content related to your query."
+
     # --- 2. Build the Prompt ---
     messages = [
         {
             "role": "user",
-            "content": f"""You are Wrapped.ai, a helpful AI assistant.
-Your goal is to answer questions about the user's conversation data.
-Use the provided CONTEXT and CHAT HISTORY to answer the user's QUERY.
-Be conversational and helpful. If you don't know the answer from the context, say so.
+            "content": f"""You are Wrapped.ai, a helpful AI assistant that analyzes a user's conversation history.
+Your task is to answer the user's QUERY based *only* on the provided CONTEXT from their past conversations and the ongoing CHAT HISTORY.
+Do not use any external knowledge. If the answer is not in the context, say that you cannot find the answer in the provided data.
+Be conversational and helpful.
 
---- CHAT HISTORY ---
+--- CHAT HISTORY (for context) ---
 {json.dumps(chat_history[-4:])}
 
---- CONTEXT ---
+--- CONTEXT (from user's most relevant conversations) ---
 {context_str}
 
 --- USER QUERY ---
@@ -324,7 +362,8 @@ Be conversational and helpful. If you don't know the answer from the context, sa
     try:
         message = claude.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=500,
+            max_tokens=800,
+            temperature=0.2,
             messages=messages
         )
         response_text = message.content[0].text
@@ -333,6 +372,171 @@ Be conversational and helpful. If you don't know the answer from the context, sa
         response_text = "Sorry, I had trouble connecting to my brain. Please try again."
 
     return jsonify({"response": response_text})
+
+@app.route('/api/collab_chat', methods=['POST'])
+def collab_chat_handler():
+    global cached_df, cached_embeddings, embedding_model, groq_client, CHAT_LOG_DIR
+    if cached_df is None or cached_embeddings is None:
+        return jsonify({"response": "Sorry, the main data is not yet loaded. Please wait a moment."}), 500
+
+    data = request.get_json()
+    sessionId = data.get('sessionId')
+    currentUserEmail = data.get('currentUserEmail')
+    message = data.get('message')
+
+    if not all([sessionId, currentUserEmail, message]):
+        return jsonify({"error": "Missing required fields for collaborative chat."}), 400
+
+    log_filename = os.path.join(CHAT_LOG_DIR, f"{sanitize_filename(sessionId)}.json")
+
+    chat_history = []
+    if os.path.exists(log_filename):
+        with open(log_filename, 'r') as f:
+            chat_history = json.load(f)
+
+    chat_history.append({"sender": currentUserEmail, "text": message})
+
+    if "@WrapperAI" in message:
+        try:
+            parts = sessionId.split('-')
+            email1, email2 = parts[0], parts[1]
+            topic = decodeURIComponent(parts[2])
+        except Exception:
+            with open(log_filename, 'w') as f:
+                json.dump(chat_history, f, indent=2)
+            return jsonify({"messages": chat_history})
+
+        def get_context_for_user(email, search_topic):
+            user_df = cached_df[cached_df['email'] == email]
+            if user_df.empty: return ""
+            
+            user_indices = user_df.index.tolist()
+            user_embeddings = cached_embeddings[user_indices]
+            topic_embedding = embedding_model.encode(search_topic)
+
+            padded_topic_embedding = np.zeros(user_embeddings.shape[1])
+            padded_topic_embedding[:topic_embedding.shape[0]] = topic_embedding
+
+            similarities = cosine_similarity([padded_topic_embedding], user_embeddings)[0]
+            top_indices = np.argsort(similarities)[-3:][::-1]
+
+            context = ""
+            for i in top_indices:
+                if similarities[i] > 0.1:
+                    match = user_df.iloc[i]
+                    context += f"Title: {match['title']}\nBody: {match['body'][:500]}...\n\n"
+            return context
+
+        context1 = get_context_for_user(email1, topic)
+        context2 = get_context_for_user(email2, topic)
+
+        # System prompt for Llama3
+        system_prompt = f"""You are Wrapped.ai, a helpful AI assistant in a collaborative chat between {email1} and {email2}. 
+You were mentioned in the conversation. Use the provided CONTEXT from both users' past conversations and the ongoing CHAT HISTORY to answer the query or provide insights.
+Address the user who mentioned you ({currentUserEmail}) but keep the other participant in mind. The topic of discussion is "{topic}"."""
+        
+        # We need to format the history for Llama3
+        history_for_prompt = []
+        for msg in chat_history:
+            role = "user" if msg["sender"] != "ai" else "assistant"
+            # Add sender's email to the content for user messages for clarity
+            content = f"[{msg['sender']}]: {msg['text']}" if role == "user" else msg['text']
+            history_for_prompt.append({"role": role, "content": content})
+
+        messages_for_api = [
+            {"role": "system", "content": system_prompt},
+            *history_for_prompt
+        ]
+        
+        
+        try:
+            chat_completion = groq_client.chat.completions.create(
+                messages=messages_for_api,
+                model="llama-3.1-8b-instant",
+                temperature=0.5,
+                max_tokens=1024,
+                top_p=1,
+                stop=None,
+            )
+            ai_message_text = chat_completion.choices[0].message.content
+        except Exception as e:
+            print(f"Groq API call failed in collab chat handler: {e}")
+            ai_message_text = "Sorry, I had trouble connecting to my new brain (Groq). Please try again."
+        
+        chat_history.append({"sender": "ai", "text": ai_message_text})
+
+    with open(log_filename, 'w') as f:
+        json.dump(chat_history, f, indent=2)
+
+    return jsonify({"messages": chat_history})
+
+@app.route('/api/summarize', methods=['POST'])
+def summarize_handler():
+    global groq_client
+    data = request.get_json()
+    conversation_body = data.get('body')
+
+    if not conversation_body:
+        return jsonify({"error": "Conversation body is required."}), 400
+
+    prompt = f"""Concisely summarize the following conversation text in 2-3 sentences. 
+Focus on the key topics and outcomes.
+Do not add any preamble like "The user is discussing..." or "This conversation is about...". Just provide the summary directly.
+
+Conversation Text:
+---
+{conversation_body}
+---
+"""
+
+    messages_for_api = [
+        {"role": "user", "content": prompt}
+    ]
+
+    try:
+        chat_completion = groq_client.chat.completions.create(
+            messages=messages_for_api,
+            model="llama-3.1-8b-instant",
+            temperature=0.2,
+            max_tokens=150,
+            top_p=1,
+            stop=None,
+        )
+        summary_text = chat_completion.choices[0].message.content
+    except Exception as e:
+        print(f"Groq API call failed in summarize handler: {e}")
+        return jsonify({"error": "Failed to generate summary."}), 500
+
+    return jsonify({"summary": summary_text})
+
+@app.route('/api/get_collab_history', methods=['POST'])
+def get_collab_history():
+    data = request.get_json()
+    sessionId = data.get('sessionId')
+    if not sessionId:
+        return jsonify({"error": "sessionId is required"}), 400
+    
+    log_filename = os.path.join(CHAT_LOG_DIR, f"{sanitize_filename(sessionId)}.json")
+    
+    if os.path.exists(log_filename):
+        with open(log_filename, 'r') as f:
+            messages = json.load(f)
+        return jsonify({"messages": messages})
+    else:
+        try:
+            topic = decodeURIComponent(sessionId.split('-')[2])
+        except IndexError:
+            topic = "your topic"
+        
+        initial_message = {
+            "sender": "ai",
+            "text": f"Welcome! This is a collaborative space to discuss \"{topic}\". I'm Wrapped.ai, an assistant you can call by typing @WrapperAI."
+        }
+        messages = [initial_message]
+        with open(log_filename, 'w') as f:
+            json.dump(messages, f, indent=2)
+        
+        return jsonify({"messages": messages})
 
 if __name__ == '__main__':
     app.run(debug=True, port=8000, threaded=False)

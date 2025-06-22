@@ -19,3 +19,10 @@ psycopg2-binary>=2.9.0
 # Utilities
 python-dotenv>=1.0.0
 pathlib2>=2.3.0
+
+# New dependencies
+anthropic
+sentence-transformers
+umap-learn
+scikit-learn
+groq

@@ -1,0 +1,26 @@
+[
+  {
+    "sender": "ai",
+    "text": "Welcome! This is a collaborative space to discuss \"SQL Query Syntax Error\". I'm Wrapped.ai, an assistant you can call by typing @WrapperAI."
+  },
+  {
+    "sender": "hello.devpatel@gmail.com",
+    "text": "@WrappedAI tell me more about sql"
+  },
+  {
+    "sender": "hello.devpatel@gmail.com",
+    "text": "@WrapperAI"
+  },
+  {
+    "sender": "ai",
+    "text": "Sorry, I had trouble connecting to my new brain (Groq). Please try again."
+  },
+  {
+    "sender": "hello.devpatel@gmail.com",
+    "text": "@WrapperAI tell me more"
+  },
+  {
+    "sender": "ai",
+    "text": "Sorry, I had trouble connecting to my new brain (Groq). Please try again."
+  }
+]
