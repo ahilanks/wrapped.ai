@@ -1,2 +1,2 @@
-*.json
+conversations.json
 logs/chat-embeddings
