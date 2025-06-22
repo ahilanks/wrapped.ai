@@ -74,7 +74,7 @@ def fetch_embeddings_from_supabase():
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
     batch_size, offset, all_records = 1000, 0, []
     # Limit records during development to prevent database timeouts on large tables
-    MAX_RECORDS_TO_FETCH = 36000
+    MAX_RECORDS_TO_FETCH = 10000
 
     while True:
         try:
@@ -142,8 +142,18 @@ def generate_cluster_titles_for_users(df, embeddings, n_clusters=5):
     return df, cluster_info
 
 def create_3d_umap_visualization(embeddings, emails, titles, timestamps, bodies):
-    reducer = umap.UMAP(n_components=3, random_state=42)
+    reducer = umap.UMAP(n_components=3, random_state=42, n_jobs=1)
     embedding_3d = reducer.fit_transform(embeddings)
+
+    # Center the point cloud at the origin
+    embedding_3d -= np.mean(embedding_3d, axis=0)
+    
+    # Scale the data to fit within a reasonable viewport
+    max_val = np.max(np.abs(embedding_3d))
+    if max_val > 0:
+        # Scale to a sphere of radius ~10
+        embedding_3d = embedding_3d / max_val * 10
+
     df = pd.DataFrame({
         'x': embedding_3d[:, 0],
         'y': embedding_3d[:, 1],

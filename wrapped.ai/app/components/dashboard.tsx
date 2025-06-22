@@ -4,9 +4,14 @@ import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { MessageCircle, X, Send, Bot, User, Loader2 } from "lucide-react"
-import ThreeScatterPlot from "./three-scatter-plot"
+import dynamic from 'next/dynamic'
 import ImageSlider from "./image-slider"
 import GoogleProfileButton from "./google-profile-button"
+
+const Modern3DUMAP = dynamic(() => import('./Modern3DUMAP'), {
+  ssr: false,
+  loading: () => <div className="w-full h-full bg-black flex items-center justify-center text-white">Loading Visualization...</div>
+})
 
 interface DashboardProps {
   user: { name: string; email: string; id?: string } | null
@@ -282,7 +287,7 @@ export default function Dashboard({ user, onLogout, onNavigate }: DashboardProps
             </CardHeader>
             <CardContent>
               <div className="w-full h-[600px] rounded-lg overflow-hidden bg-gray-900/50 border border-gray-700">
-                <ThreeScatterPlot />
+                <Modern3DUMAP />
               </div>
             </CardContent>
           </Card>

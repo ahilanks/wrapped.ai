@@ -79,6 +79,8 @@ const Modern3DUMAP: React.FC = () => {
   const [comparisonUser, setComparisonUser] = useState<ConversationPoint | null>(null);
   const [sharedConnections, setSharedConnections] = useState<any[]>([]);
   const connectionLinesRef = useRef<THREE.Group | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const mainContainerRef = useRef<HTMLDivElement>(null);
 
   // Color palette
   const colorPalette = [
@@ -451,6 +453,8 @@ const Modern3DUMAP: React.FC = () => {
     if (!canvasRef.current || !cameraRef.current || !rendererRef.current) return;
     
     const container = canvasRef.current;
+    if (container.clientWidth === 0 || container.clientHeight === 0) return;
+
     cameraRef.current.aspect = container.clientWidth / container.clientHeight;
     cameraRef.current.updateProjectionMatrix();
     rendererRef.current.setSize(container.clientWidth, container.clientHeight);
@@ -480,22 +484,36 @@ const Modern3DUMAP: React.FC = () => {
 
   // Initialize scene and fetch data
   useEffect(() => {
+    if (!canvasRef.current) return;
+
     initScene();
     fetchData();
 
     const cleanupControls = setupControls();
     animate();
 
-    window.addEventListener('resize', handleResize);
+    const resizeObserver = new ResizeObserver(() => handleResize());
+    resizeObserver.observe(canvasRef.current);
+
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+      // Ensure resize is called on fullscreen change
+      setTimeout(handleResize, 50);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
 
     return () => {
       if (animationIdRef.current) {
         cancelAnimationFrame(animationIdRef.current);
       }
-      window.removeEventListener('resize', handleResize);
+      
+      resizeObserver.disconnect();
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+
       if (cleanupControls) cleanupControls();
       
-      if (rendererRef.current && canvasRef.current) {
+      if (rendererRef.current && canvasRef.current && rendererRef.current.domElement.parentElement === canvasRef.current) {
         canvasRef.current.removeChild(rendererRef.current.domElement);
         rendererRef.current.dispose();
       }
@@ -577,11 +595,36 @@ const Modern3DUMAP: React.FC = () => {
     }
   }, [comparisonMode, sharedConnections]);
 
+  const toggleFullscreen = useCallback(() => {
+    if (!mainContainerRef.current) return;
+
+    if (!document.fullscreenElement) {
+      mainContainerRef.current.requestFullscreen().catch(err => {
+        alert(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`);
+      });
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen();
+      setIsFullscreen(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
   return (
-    <div style={{ 
+    <div 
+      ref={mainContainerRef}
+      style={{ 
       position: 'relative', 
-      width: '100vw', 
-      height: '100vh', 
+      width: '100%', 
+      height: '100%', 
       background: '#000000',
       fontFamily: "'Inter', sans-serif"
     }}>
@@ -1005,6 +1048,10 @@ const Modern3DUMAP: React.FC = () => {
           </select>
         </div>
         
+        <button className="refresh-btn" onClick={toggleFullscreen} style={{width: '100%', marginTop: '16px'}}>
+          {isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+        </button>
+        
         <button className="refresh-btn" onClick={refreshData}>
           Refresh Data
         </button>
@@ -1198,4 +1245,4 @@ const Modern3DUMAP: React.FC = () => {
   );
 };
 
-export default Modern3DUMAP;
+export default Modern3DUMAP; 
