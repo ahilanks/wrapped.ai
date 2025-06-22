@@ -25,7 +25,7 @@ os.environ['NUMBA_NUM_THREADS'] = '1'
 # --- Setup ---
 SUPABASE_URL = "https://aqavgmrcggugruedqtzv.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFxYXZnbXJjZ2d1Z3J1ZWRxdHp2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1NDA5MTMsImV4cCI6MjA2NjExNjkxM30.f4RSnwdPVkSpApBUuzZlYnG63Y-3SUQtYkAhXpi3tFk"
-ANTHROPIC_API_KEY = "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"
+ANTHROPIC_API_KEY = "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"
 
 app = Flask(__name__, static_folder='dist', static_url_path=None)
 CORS(app)
@@ -39,13 +39,13 @@ def generate_cluster_title_with_claude(conversation_titles, cluster_id, max_retr
 Here are the conversation titles in this cluster:
 {titles_text}
 
-Please generate a very short (2-4 words) descriptive title..."""
+Please generate a very short (2-4 words) descriptive title... DO NOT give anything more or else. only say 2-4 words starting now!"""
     
     for attempt in range(max_retries):
         try:
             message = claude.messages.create(
                 model="claude-3-haiku-20240307",
-                max_tokens=50,
+                max_tokens=6,
                 messages=[{"role": "user", "content": prompt}]
             )
             return message.content[0].text.strip().replace('"', '').replace("'", "")
@@ -266,6 +266,74 @@ def compare_users():
         top_pairs.append(pair_info)
     
     return jsonify(top_pairs)
+
+@app.route('/api/chat', methods=['POST'])
+def chat_handler():
+    global cached_df, claude
+    if cached_df is None:
+        return jsonify({"response": "Sorry, the data is not yet loaded. Please wait a moment and try again."}), 500
+
+    data = request.get_json()
+    query = data.get('query')
+    user_email = data.get('user_email')
+    selected_conversation = data.get('selected_conversation')
+    chat_history = data.get('chat_history', [])
+
+    if not query:
+        return jsonify({"error": "Query is required."}), 400
+
+    # --- 1. Gather Context ---
+    context_str = "Here is some context about the user's conversations:\n"
+    
+    if selected_conversation:
+        context_str += f"- You are currently looking at a conversation titled: '{selected_conversation.get('title', 'N/A')}'.\n"
+        body = selected_conversation.get('body')
+        if body:
+            context_str += f"  Summary of this conversation: {body[:500]}...\n"
+
+    if user_email:
+        user_df = cached_df[cached_df['email'] == user_email].copy()
+        if not user_df.empty:
+            user_df['timestamp'] = pd.to_datetime(user_df['timestamp'])
+            recent_convos = user_df.nlargest(3, 'timestamp')
+            context_str += "\nHere are some of the user's most recent conversations:\n"
+            for _, row in recent_convos.iterrows():
+                context_str += f"- Title: {row['title']}\n"
+    
+    # --- 2. Build the Prompt ---
+    messages = [
+        {
+            "role": "user",
+            "content": f"""You are Wrapped.ai, a helpful AI assistant.
+Your goal is to answer questions about the user's conversation data.
+Use the provided CONTEXT and CHAT HISTORY to answer the user's QUERY.
+Be conversational and helpful. If you don't know the answer from the context, say so.
+
+--- CHAT HISTORY ---
+{json.dumps(chat_history[-4:])}
+
+--- CONTEXT ---
+{context_str}
+
+--- USER QUERY ---
+{query}
+"""
+        }
+    ]
+
+    # --- 3. Call Claude API ---
+    try:
+        message = claude.messages.create(
+            model="claude-3-haiku-20240307",
+            max_tokens=500,
+            messages=messages
+        )
+        response_text = message.content[0].text
+    except Exception as e:
+        print(f"Claude API call failed in chat handler: {e}")
+        response_text = "Sorry, I had trouble connecting to my brain. Please try again."
+
+    return jsonify({"response": response_text})
 
 if __name__ == '__main__':
     app.run(debug=True, port=8000, threaded=False)

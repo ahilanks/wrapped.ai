@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
+import Chatbot from './Chatbot';
 
 interface ConversationPoint {
   x: number;
@@ -42,6 +43,7 @@ const Modern3DUMAP: React.FC = () => {
   const pointsRef = useRef<THREE.Points | null>(null);
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2());
+  const originalPositionsRef = useRef<Float32Array | null>(null);
   const sphericalRef = useRef<SphericalCoordinates>({
     radius: 15,
     theta: 0,
@@ -79,6 +81,7 @@ const Modern3DUMAP: React.FC = () => {
   const [comparisonUser, setComparisonUser] = useState<ConversationPoint | null>(null);
   const [sharedConnections, setSharedConnections] = useState<any[]>([]);
   const connectionLinesRef = useRef<THREE.Group | null>(null);
+  const [isChatbotVisible, setIsChatbotVisible] = useState<boolean>(false);
 
   // Color palette
   const colorPalette = [
@@ -92,13 +95,18 @@ const Modern3DUMAP: React.FC = () => {
     try {
       setIsLoading(true);
       setError(null);
+      console.log('Fetching data...');
       
-      const response = await fetch('/api/data');
+      const response = await fetch('http://localhost:8000/api/data');
+      console.log('Fetch response received:', response.status);
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       
+      console.log('Parsing JSON data...');
       const apiData: APIResponse = await response.json();
+      console.log('Data parsed successfully:', apiData);
       
       setData(apiData.data);
       setStats(apiData.stats);
@@ -123,6 +131,7 @@ const Modern3DUMAP: React.FC = () => {
       console.error('Error fetching data:', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch data');
     } finally {
+      console.log('Fetch process finished, updating loading state.');
       setIsLoading(false);
     }
   }, []);
@@ -242,6 +251,8 @@ const Modern3DUMAP: React.FC = () => {
       sizes[i] = Math.random() * 0.5 + 0.8;
     });
     
+    originalPositionsRef.current = positions.slice();
+
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
@@ -300,18 +311,19 @@ const Modern3DUMAP: React.FC = () => {
 
   // This useEffect replaces the old filterData and updateVisibility logic
   useEffect(() => {
-    if (!pointsRef.current || !data || data.length === 0) return;
+    if (!pointsRef.current || !data || data.length === 0 || !originalPositionsRef.current) return;
     
     const geometry = pointsRef.current.geometry;
     const positions = geometry.attributes.position.array as Float32Array;
+    const originalPositions = originalPositionsRef.current;
     const term = searchTerm.toLowerCase();
 
     const newFilteredIndices = new Set<number>();
     
     data.forEach((point, index) => {
-      const searchMatch = !term || 
-          point.title.toLowerCase().includes(term) || 
-          point.email.toLowerCase().includes(term) ||
+      const searchMatch = !term ||
+          (point.title && point.title.toLowerCase().includes(term)) ||
+          (point.email && point.email.toLowerCase().includes(term)) ||
           (point.cluster_title && point.cluster_title.toLowerCase().includes(term)) ||
           (point.body && point.body.toLowerCase().includes(term));
       
@@ -322,9 +334,9 @@ const Modern3DUMAP: React.FC = () => {
 
       if (isVisible) {
         newFilteredIndices.add(index);
-        positions[index * 3] = point.x;
-        positions[index * 3 + 1] = point.y;
-        positions[index * 3 + 2] = point.z;
+        positions[index * 3] = originalPositions[index * 3];
+        positions[index * 3 + 1] = originalPositions[index * 3 + 1];
+        positions[index * 3 + 2] = originalPositions[index * 3 + 2];
       } else {
         // Move points far away to hide them, using a large number
         positions[index * 3] = 10000;
@@ -1009,6 +1021,14 @@ const Modern3DUMAP: React.FC = () => {
           Refresh Data
         </button>
         
+        <button 
+          className="refresh-btn" 
+          onClick={() => setIsChatbotVisible(!isChatbotVisible)}
+          style={{width: '100%', marginTop: '16px'}}
+        >
+          {isChatbotVisible ? 'Hide Chatbot' : 'Show Chatbot'}
+        </button>
+        
         <div className="stats">
           <div className="stats-item">
             <span>Total Points:</span>
@@ -1172,7 +1192,7 @@ const Modern3DUMAP: React.FC = () => {
                   <div style={{fontWeight: 600, color: '#fff', marginBottom: '8px', fontSize: '11px', textTransform: 'uppercase', opacity: 0.8, letterSpacing: '0.5px'}}>
                     ~{(conn.similarity * 100).toFixed(0)}% Match
                   </div>
-                  <div style={{marginBottom: '6px'}}>
+                  <div style={{marginBottom: '12px'}}>
                     <span style={{opacity: 0.7, fontWeight: 400}}>You: </span>
                     <span style={{color: userColors.get(conn.conversation1.email) || '#fff', fontWeight: 300}}>
                       {conn.conversation1.title}
@@ -1193,6 +1213,13 @@ const Modern3DUMAP: React.FC = () => {
             )}
           </div>
         </div>
+      )}
+      
+      {isChatbotVisible && (
+        <Chatbot 
+          selectedPoint={selectedPoint}
+          currentUserEmail={currentUserEmail} 
+        />
       )}
     </div>
   );

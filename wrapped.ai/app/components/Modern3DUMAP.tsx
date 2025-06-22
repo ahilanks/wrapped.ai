@@ -1219,7 +1219,7 @@ const Modern3DUMAP: React.FC = () => {
                   <div style={{fontWeight: 600, color: '#fff', marginBottom: '8px', fontSize: '11px', textTransform: 'uppercase', opacity: 0.8, letterSpacing: '0.5px'}}>
                     ~{(conn.similarity * 100).toFixed(0)}% Match
                   </div>
-                  <div style={{marginBottom: '6px'}}>
+                  <div style={{marginBottom: '12px'}}>
                     <span style={{opacity: 0.7, fontWeight: 400}}>You: </span>
                     <span style={{color: userColors.get(conn.conversation1.email) || '#fff', fontWeight: 300}}>
                       {conn.conversation1.title}
